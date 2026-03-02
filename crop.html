@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Board Art — Crop Tool</title>
+
+  <!--
+    Google Fonts:
+    - Plus Jakarta Sans: clean, modern font for all UI text
+    - JetBrains Mono: monospace font for pixel dimensions and URLs
+
+    "preconnect" tells the browser to start connecting to Google's
+    font servers early, so fonts load faster.
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!--
+    Cropper.js CSS — styles for the interactive crop overlay.
+    Loaded from a CDN (content delivery network), so we don't need
+    to install anything locally.
+  -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
+
+  <style>
+    /* =================================================================
+       CSS CUSTOM PROPERTIES (VARIABLES)
+       All colors, fonts, and sizes defined in one place.
+       Change a value here and it updates everywhere it's used.
+       ================================================================= */
+    :root {
+      /* Background layers (darkest → lightest) */
+      --bg-base: #0a0a0f;
+      --bg-surface: #131318;
+      --bg-elevated: #1b1b22;
+
+      /* Borders */
+      --border: #26263a;
+      --border-hover: #36364a;
+
+      /* Text hierarchy (brightest → dimmest) */
+      --text-primary: #ebe8e2;
+      --text-secondary: #8885a0;
+      --text-muted: #55536a;
+
+      /* Accent — warm gold gives an art-gallery feel */
+      --accent: #c8a74e;
+      --accent-hover: #d9ba60;
+      --accent-glow: rgba(200, 167, 78, 0.12);
+
+      /* Status colors */
+      --good: #4aad66;
+      --good-glow: rgba(74, 173, 102, 0.35);
+      --warn: #d0913a;
+      --warn-glow: rgba(208, 145, 58, 0.35);
+      --error: #c04848;
+
+      /* Fonts */
+      --font-ui: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+
+      /* Corner rounding */
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    /* =================================================================
+       RESET & BASE
+       Remove default browser margins/padding so our layout is precise.
+       ================================================================= */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      overflow: hidden; /* Tool should fit the viewport, no scrolling */
+    }
+
+    /* Subtle radial glow at the top — adds depth */
+    body::after {
+      content: '';
+      position: fixed;
+      top: -40%;
+      left: 20%;
+      width: 60%;
+      height: 80%;
+      background: radial-gradient(ellipse, rgba(200, 167, 78, 0.025), transparent 70%);
+      pointer-events: none;
+    }
+
+    /* =================================================================
+       APP SHELL
+       Flexbox column layout that fills the full viewport height.
+       Header at top, content in middle, toolbar at bottom.
+       ================================================================= */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* =================================================================
+       HEADER
+       ================================================================= */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .logo {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--text-muted);
+    }
+
+    .logo em {
+      font-style: normal;
+      color: var(--accent);
+    }
+
+    .change-btn {
+      font-size: 13px;
+      font-family: var(--font-ui);
+      color: var(--text-secondary);
+      background: none;
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s;
+      display: none; /* Hidden until an image is loaded */
+    }
+
+    .change-btn:hover {
+      color: var(--text-primary);
+      border-color: var(--border-hover);
+      background: var(--bg-elevated);
+    }
+
+    /* =================================================================
+       INPUT VIEW
+       The landing screen — drop zone + URL input, centered on page.
+       ================================================================= */
+    .input-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+      gap: 20px;
+    }
+
+    .input-view.hidden { display: none; }
+
+    /* ----- Drop Zone ----- */
+    .drop-zone {
+      width: 100%;
+      max-width: 520px;
+      aspect-ratio: 16 / 9;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      cursor: pointer;
+      transition: border-color 0.25s, background 0.25s;
+      background: var(--bg-surface);
+    }
+
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .drop-zone-icon {
+      width: 44px;
+      height: 44px;
+      color: var(--text-muted);
+      transition: color 0.25s;
+    }
+
+    .drop-zone:hover .drop-zone-icon,
+    .drop-zone.drag-over .drop-zone-icon {
+      color: var(--accent);
+    }
+
+    .drop-zone-label {
+      font-size: 15px;
+      color: var(--text-secondary);
+      text-align: center;
+      line-height: 1.7;
+    }
+
+    .drop-zone-label strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .drop-zone-hint {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+    }
+
+    /* Hidden native file picker — triggered by clicking the drop zone */
+    .file-input { display: none; }
+
+    /* ----- "or" divider ----- */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      max-width: 520px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+    }
+
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ----- URL Input ----- */
+    .url-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    .url-input {
+      flex: 1;
+      padding: 10px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .url-input::placeholder { color: var(--text-muted); }
+    .url-input:focus { border-color: var(--accent); }
+
+    .url-load-btn {
+      padding: 10px 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .url-load-btn:hover {
+      background: var(--border);
+      border-color: var(--border-hover);
+    }
+
+    /* ----- Error Message ----- */
+    .error-msg {
+      font-size: 13px;
+      color: var(--error);
+      text-align: center;
+      max-width: 520px;
+      display: none;
+    }
+
+    .error-msg.visible { display: block; }
+
+    /* =================================================================
+       CROP VIEW
+       Shown after an image is loaded. Cropper fills available space,
+       toolbar sits at the bottom.
+       ================================================================= */
+    .crop-view {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      padding: 16px 24px 20px;
+      gap: 14px;
+      min-height: 0; /* Lets this flex child shrink below its content size */
+    }
+
+    .crop-view.visible { display: flex; }
+
+    /* Container that Cropper.js takes over */
+    .cropper-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      background: var(--bg-surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .cropper-wrap img {
+      display: block;
+      max-width: 100%;
+    }
+
+    /* Loading spinner overlay */
+    .loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-surface);
+      z-index: 10;
+      border-radius: var(--radius);
+    }
+
+    .loading.hidden { display: none; }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 2.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ----- Bottom Toolbar ----- */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .resolution {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .res-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .res-dot.good {
+      background: var(--good);
+      box-shadow: 0 0 6px var(--good-glow);
+    }
+
+    .res-dot.warn {
+      background: var(--warn);
+      box-shadow: 0 0 6px var(--warn-glow);
+    }
+
+    .res-label { color: var(--text-secondary); }
+    .res-label .dim { color: var(--text-muted); }
+
+    /* Download button */
+    .download-btn {
+      padding: 10px 28px;
+      background: var(--accent);
+      color: var(--bg-base);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-ui);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .download-btn:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 4px 16px rgba(200, 167, 78, 0.25);
+      transform: translateY(-1px);
+    }
+
+    .download-btn:active { transform: translateY(0); }
+
+    /* =================================================================
+       CROPPER.JS THEME OVERRIDES
+       Make the crop overlay match our dark/gold color scheme.
+       ================================================================= */
+    .cropper-view-box {
+      outline: 2px solid rgba(200, 167, 78, 0.7);
+    }
+
+    .cropper-line {
+      background-color: var(--accent);
+      opacity: 0.18;
+    }
+
+    .cropper-point {
+      background-color: var(--accent);
+      opacity: 0.85;
+      width: 10px !important;
+      height: 10px !important;
+      border-radius: 50%;
+    }
+
+    .cropper-dashed {
+      border-color: rgba(200, 167, 78, 0.25);
+    }
+
+    .cropper-modal {
+      background-color: rgba(10, 10, 15, 0.55);
+    }
+
+    .cropper-face {
+      background-color: transparent;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+
+    <!-- ==================== HEADER ==================== -->
+    <header class="header">
+      <div class="logo"><em>Board Art</em> · Crop Tool</div>
+      <button class="change-btn" id="changeBtn">Change Image</button>
+    </header>
+
+    <!-- ==================== INPUT VIEW ==================== -->
+    <div class="input-view" id="inputView">
+
+      <!-- Drop Zone -->
+      <div class="drop-zone" id="dropZone">
+        <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <path d="m21 15-5-5L5 21"/>
+        </svg>
+        <div class="drop-zone-label">
+          <strong>Drop an image here</strong><br>
+          or click to browse
+        </div>
+        <div class="drop-zone-hint">⌘V to paste from clipboard</div>
+      </div>
+
+      <!-- Hidden file input (opened when drop zone is clicked) -->
+      <input type="file" class="file-input" id="fileInput" accept="image/*">
+
+      <div class="divider">or paste a URL</div>
+
+      <div class="url-row">
+        <input type="text" class="url-input" id="urlInput"
+               placeholder="https://example.com/image.jpg">
+        <button class="url-load-btn" id="urlLoadBtn">Load</button>
+      </div>
+
+      <div class="error-msg" id="errorMsg"></div>
+    </div>
+
+    <!-- ==================== CROP VIEW ==================== -->
+    <div class="crop-view" id="cropView">
+      <div class="cropper-wrap" id="cropperWrap">
+        <img id="cropImage" alt="Image to crop">
+        <div class="loading" id="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="resolution">
+          <div class="res-dot" id="resDot"></div>
+          <div class="res-label" id="resLabel"></div>
+        </div>
+        <button class="download-btn" id="downloadBtn">Download PNG</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Cropper.js library from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+
+  <script>
+    /* =================================================================
+       APP LOGIC
+       Handles three image-input methods, Cropper.js integration,
+       quality checking, and PNG download.
+       ================================================================= */
+
+    // ---- Grab references to every element we'll interact with ----
+    var dropZone     = document.getElementById('dropZone');
+    var fileInput    = document.getElementById('fileInput');
+    var urlInput     = document.getElementById('urlInput');
+    var urlLoadBtn   = document.getElementById('urlLoadBtn');
+    var errorMsg     = document.getElementById('errorMsg');
+    var inputView    = document.getElementById('inputView');
+    var cropView     = document.getElementById('cropView');
+    var cropImage    = document.getElementById('cropImage');
+    var loading      = document.getElementById('loading');
+    var changeBtn    = document.getElementById('changeBtn');
+    var resDot       = document.getElementById('resDot');
+    var resLabel     = document.getElementById('resLabel');
+    var downloadBtn  = document.getElementById('downloadBtn');
+
+    // ---- State: the active Cropper.js instance (null when no image) ----
+    var cropper = null;
+
+    // ==================================================
+    // CORE: Load an image into the cropper
+    // ==================================================
+
+    function loadImage(src) {
+      hideError();
+
+      // Switch views
+      inputView.classList.add('hidden');
+      cropView.classList.add('visible');
+      changeBtn.style.display = 'block';
+
+      // Destroy any previous cropper
+      if (cropper) {
+        cropper.destroy();
+        cropper = null;
+      }
+
+      // Show spinner while the image loads
+      loading.classList.remove('hidden');
+
+      // Setting src triggers the browser to fetch the image
+      cropImage.src = src;
+    }
+
+    // When the image finishes loading, initialize Cropper.js
+    cropImage.addEventListener('load', function () {
+      cropper = new Cropper(cropImage, {
+        aspectRatio: 16 / 9,       // Lock to 16:9 (the board's ratio)
+        viewMode: 1,               // Image can't be zoomed smaller than the crop box
+        dragMode: 'move',          // Dragging pans the image under the crop box
+        autoCropArea: 1,           // Start with the crop box as large as possible
+        restore: false,
+        guides: true,              // Rule-of-thirds dashed lines
+        center: true,              // Center crosshair indicator
+        highlight: false,
+        cropBoxMovable: true,
+        cropBoxResizable: true,
+        toggleDragModeOnDblclick: false,
+        checkCrossOrigin: false,   // We handle CORS ourselves
+
+        ready: function () {
+          loading.classList.add('hidden');
+          updateResolution(cropper.getData());
+        },
+
+        crop: function (event) {
+          // Fires every time the crop changes — update quality indicator
+          updateResolution(event.detail);
+        }
+      });
+    });
+
+    // If the image fails to load (bad URL, network error, etc.)
+    cropImage.addEventListener('error', function () {
+      if (!cropImage.src || cropImage.src === location.href) return;
+      loading.classList.add('hidden');
+      resetTool();
+      showError('Could not load that image. Try saving it to your computer first, then drag it here.');
+    });
+
+    // Reset back to the input view
+    function resetTool() {
+      if (cropper) {
+        cropper.destroy();
+        cropper = null;
+      }
+      cropView.classList.remove('visible');
+      inputView.classList.remove('hidden');
+      changeBtn.style.display = 'none';
+      cropImage.removeAttribute('src');
+      urlInput.value = '';
+      fileInput.value = '';
+      hideError();
+    }
+
+    // ==================================================
+    // QUALITY CHECK
+    // ==================================================
+
+    // data.width and data.height are in the source image's pixels.
+    // If the cropped region is smaller than 1920×1080, the output
+    // will be upscaled (stretched), which looks blurry on the board.
+    function updateResolution(data) {
+      var w = Math.round(data.width);
+      var h = Math.round(data.height);
+      var isGood = w >= 1920 && h >= 1080;
+
+      resDot.className = 'res-dot ' + (isGood ? 'good' : 'warn');
+
+      if (isGood) {
+        resLabel.innerHTML = w + ' &times; ' + h +
+          ' <span class="dim">&mdash; good for the board</span>';
+      } else {
+        resLabel.innerHTML = w + ' &times; ' + h +
+          ' <span class="dim">&mdash; may look blurry (need 1920 &times; 1080)</span>';
+      }
+    }
+
+    // ==================================================
+    // DOWNLOAD
+    // ==================================================
+
+    downloadBtn.addEventListener('click', function () {
+      if (!cropper) return;
+
+      try {
+        // Render the cropped region at exactly 1920×1080
+        var canvas = cropper.getCroppedCanvas({
+          width: 1920,
+          height: 1080,
+          imageSmoothingEnabled: true,
+          imageSmoothingQuality: 'high'
+        });
+
+        // Convert to PNG and trigger download
+        canvas.toBlob(function (blob) {
+          if (!blob) {
+            corsWarning();
+            return;
+          }
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = 'board-art.png';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 'image/png');
+      } catch (err) {
+        // Tainted canvas — the image is cross-origin and the server
+        // didn't send CORS headers, so the browser blocks export.
+        corsWarning();
+      }
+    });
+
+    function corsWarning() {
+      alert(
+        "Can't export this image due to browser security restrictions (CORS).\n\n" +
+        "Fix: Save the image to your computer first, then drag it into this tool."
+      );
+    }
+
+    // ==================================================
+    // INPUT METHOD 1: DRAG & DROP
+    // ==================================================
+
+    dropZone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', function () {
+      dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+
+      // File from the file system
+      var file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        readFile(file);
+        return;
+      }
+
+      // URL dragged from a browser tab
+      var url = e.dataTransfer.getData('text/uri-list')
+             || e.dataTransfer.getData('text/plain');
+      if (url && /^https?:\/\//.test(url)) {
+        loadImage(url);
+        return;
+      }
+
+      showError('Please drop an image file (PNG, JPG, WebP, etc.)');
+    });
+
+    // Clicking the drop zone opens the native file picker
+    dropZone.addEventListener('click', function () {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', function () {
+      if (fileInput.files[0]) readFile(fileInput.files[0]);
+    });
+
+    // Convert a File to a data URL and load it
+    function readFile(file) {
+      var reader = new FileReader();
+      reader.onload = function (e) { loadImage(e.target.result); };
+      reader.readAsDataURL(file);
+    }
+
+    // ==================================================
+    // INPUT METHOD 2: URL
+    // ==================================================
+
+    urlLoadBtn.addEventListener('click', loadFromUrl);
+
+    urlInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') loadFromUrl();
+    });
+
+    function loadFromUrl() {
+      var url = urlInput.value.trim();
+      if (!url) { showError('Please enter an image URL.'); return; }
+      if (!/^https?:\/\/.+/.test(url)) {
+        showError('URL must start with http:// or https://');
+        return;
+      }
+      loadImage(url);
+    }
+
+    // ==================================================
+    // INPUT METHOD 3: CLIPBOARD PASTE (⌘V)
+    // ==================================================
+
+    document.addEventListener('paste', function (e) {
+      // Don't intercept when the user is typing in the URL field
+      if (document.activeElement === urlInput) return;
+
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          e.preventDefault();
+          readFile(items[i].getAsFile());
+          return;
+        }
+      }
+    });
+
+    // ==================================================
+    // HELPERS
+    // ==================================================
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.classList.add('visible');
+    }
+
+    function hideError() {
+      errorMsg.classList.remove('visible');
+    }
+
+    changeBtn.addEventListener('click', resetTool);
+  </script>
+</body>
+</html>
